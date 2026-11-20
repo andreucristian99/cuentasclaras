@@ -112,6 +112,9 @@ nav button.on{color:var(--or)}
 .curopt{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;text-align:left;width:100%}
 .curopt span{font-size:22px}.curopt b{flex:1;font-weight:600}.curopt i{font-style:normal;color:var(--mut);font-weight:700}
 .curopt.on{border-color:var(--or);background:color-mix(in srgb,var(--or) 16%,var(--card))}.curopt.on i{color:var(--or)}
+.hcur{padding:10px 0;border-top:1px solid rgba(255,255,255,.25)}.hcur.first{border-top:0;padding-top:4px}
+.hc-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px}.hc-top span{font-size:14px;font-weight:600;opacity:.95}.hc-top b{font-size:22px;font-weight:800}.hcur.first .hc-top b{font-size:30px}
+.hc-sub{font-size:12px;opacity:.85;margin-top:2px}
 .link{color:var(--mut);margin-top:22px;font-size:14px;text-decoration:underline}
 </style>
 </head>
@@ -157,8 +160,8 @@ const CUR={
 const NFS={};
 function getNF(c){if(!CUR[c])c="EUR";if(!NFS[c]){try{NFS[c]=new Intl.NumberFormat(CUR[c].loc,{style:"currency",currency:c,useGrouping:"always"})}catch(e){NFS[c]={format:n=>n.toFixed(2).replace(".",",")+" "+CUR[c].sym}}}return NFS[c]}
 const curCode=()=>(D&&CUR[D.currency])?D.currency:"EUR";
-const fmt=n=>getNF(curCode()).format(Math.round((+n||0)*100)/100);
-const ph=()=>"0,00 "+CUR[curCode()].sym;
+const fmt=(n,c)=>getNF(c||curCode()).format(Math.round((+n||0)*100)/100);
+const ph=c=>"0,00 "+CUR[(c&&CUR[c])?c:curCode()].sym;
 const parseAmt=s=>{s=String(s||"").trim().replace(/\s|€/g,"");if(s.includes(",")){s=s.replace(/\./g,"").replace(",",".")}else if(/^\d{1,3}(\.\d{3})+$/.test(s)){s=s.replace(/\./g,"")}const n=parseFloat(s);return isFinite(n)?Math.round(n*100)/100:NaN};
 const amtStr=n=>(Math.round(n*100)/100).toString().replace(".",",");
 const cap=s=>s.charAt(0).toUpperCase()+s.slice(1);
@@ -181,15 +184,23 @@ const S={view:"inicio",month:curMonth(),filter:"todos",lockStep:null,pin:"",pin1
 const curPicker=(sel,act)=>`<div class="curpick">${Object.keys(CUR).map(k=>`<button class="curopt ${sel===k?"on":""}" data-act="${act}" data-c="${k}"><span>${CUR[k].flag}</span><b>${CUR[k].name}</b><i>${CUR[k].sym}</i></button>`).join("")}</div>`;
 
 function blank(){return{currency:"EUR",accounts:[],tx:[],recurring:[],savingsInitial:0,goal:null}}
-function loadData(id){try{const d=JSON.parse(store.get("cc_data_"+id)||"null");return Object.assign(blank(),d||{})}catch(e){return blank()}}
+function loadData(id){let d;try{d=Object.assign(blank(),JSON.parse(store.get("cc_data_"+id)||"null")||{})}catch(e){d=blank()}if(!CUR[d.currency])d.currency="EUR";for(const a of d.accounts)if(!CUR[a.currency])a.currency=d.currency;return d}
 function save(){if(P)store.set("cc_data_"+P.id,JSON.stringify(D))}
 
 /* ---------- calculations ---------- */
 const accName=id=>{const a=D.accounts.find(a=>a.id===id);return a?a.name:"—"};
 function accBalance(a){let b=+a.initial||0;for(const t of D.tx){if(t.accountId!==a.id)continue;b+=TYPES[t.type].sign*t.amount}return b}
-function savingsBal(){let s=+D.savingsInitial||0;for(const t of D.tx){if(t.type==="ahorro")s+=t.amount;else if(t.type==="retiro")s-=t.amount}return s}
-const available=()=>D.accounts.reduce((s,a)=>s+accBalance(a),0);
-function monthSum(m){const r={ingreso:0,fijo:0,boludo:0,sub:0,ahorro:0,retiro:0};for(const t of D.tx)if(t.date.slice(0,7)===m)r[t.type]+=t.amount;return r}
+const accById=id=>D.accounts.find(a=>a.id===id);
+const accCur=a=>(a&&CUR[a.currency])?a.currency:curCode();
+const txCur=t=>accCur(accById(t.accountId));
+function usedCurs(){const l=[curCode()];for(const a of D.accounts){const c=accCur(a);if(!l.includes(c))l.push(c)}return l}
+const isMulti=()=>usedCurs().length>1;
+function savingsBal(c){c=c||curCode();let s=c===curCode()?(+D.savingsInitial||0):0;for(const t of D.tx){if(txCur(t)!==c)continue;if(t.type==="ahorro")s+=t.amount;else if(t.type==="retiro")s-=t.amount}return s}
+const available=c=>{c=c||curCode();return D.accounts.filter(a=>accCur(a)===c).reduce((s,a)=>s+accBalance(a),0)};
+function monthSum(m,c){c=c||curCode();const r={ingreso:0,fijo:0,boludo:0,sub:0,ahorro:0,retiro:0};for(const t of D.tx)if(t.date.slice(0,7)===m&&txCur(t)===c)r[t.type]+=t.amount;return r}
+/* sum a list of [amount,currency] into "1.000 € + 20 US$" */
+function fmtMix(items,signed){const by={};for(const [n,c] of items)by[c]=(by[c]||0)+n;const ks=usedCurs().filter(c=>c in by&&Math.abs(by[c])>0.004);if(!ks.length)return fmt(0);return ks.map(c=>(signed?(by[c]>=0?"+":"−"):"")+fmt(signed?Math.abs(by[c]):by[c],c)).join(" · ")}
+const sumCur=()=>usedCurs().includes(S.sumCur)?S.sumCur:curCode();
 const paidIn=(r,m)=>D.tx.find(t=>t.recurringId===r.id&&t.date.slice(0,7)===m);
 const sortTx=a=>a.slice().sort((x,y)=>y.date.localeCompare(x.date)||(y.ts||0)-(x.ts||0));
 
@@ -260,11 +271,11 @@ const topBar=(t,sub)=>`<div class="top"><div><h1>${t}</h1>${sub?`<div class="sub
 const monthNav=()=>`<div class="monthnav"><button data-act="mprev">‹</button><b>${esc(monthName(S.month))}</b><button data-act="mnext">›</button></div>`;
 function txItem(t){
   const T=TYPES[t.type];const plus=T.sign>0;
-  return `<button class="item" data-act="edit-tx" data-id="${t.id}" style="--c:${T.c}"><span class="ic">${T.e}</span><span class="mid"><b>${esc(t.concept||T.label)}</b><span>${T.label} · ${esc(accName(t.accountId))}</span></span><span class="amt ${plus?"pos":"neg"}">${plus?"+":"−"}${fmt(t.amount)}</span></button>`;
+  return `<button class="item" data-act="edit-tx" data-id="${t.id}" style="--c:${T.c}"><span class="ic">${T.e}</span><span class="mid"><b>${esc(t.concept||T.label)}</b><span>${T.label} · ${esc(accName(t.accountId))}</span></span><span class="amt ${plus?"pos":"neg"}">${plus?"+":"−"}${fmt(t.amount,txCur(t))}</span></button>`;
 }
 
 function vInicio(){
-  const av=available(),sv=savingsBal(),m=monthSum(S.month);
+  const SC=sumCur(),av=available(),sv=savingsBal(),m=monthSum(S.month,SC),multi=isMulti();
   const gastos=m.fijo+m.boludo+m.sub,netAh=m.ahorro-m.retiro,libre=m.ingreso-gastos-netAh;
   const base=Math.max(m.ingreso,gastos+Math.max(netAh,0),1);
   const seg=["fijo","boludo","sub"].map(k=>`<i style="width:${m[k]/base*100}%;background:${TYPES[k].c}"></i>`).join("")+(netAh>0?`<i style="width:${netAh/base*100}%;background:${TYPES.ahorro.c}"></i>`:"");
@@ -272,13 +283,15 @@ function vInicio(){
   const pend=isCur?D.recurring.filter(r=>!paidIn(r,S.month)).sort((a,b)=>(a.day||0)-(b.day||0)):[];
   const last=sortTx(D.tx.filter(t=>t.date.slice(0,7)===S.month)).slice(0,6);
   return topBar(`Hola, ${esc(P.name)}`,"Tus cuentas, claras")+
-  `<div class="card hero"><div class="lbl">Saldo total</div><div class="big">${fmt(av+sv)}</div><div class="row"><div class="mini"><span>En cuentas</span><b>${fmt(av)}</b></div><div class="mini"><span>En ahorros</span><b>${fmt(sv)}</b></div></div></div>`+
-  (D.accounts.length?`<div class="sect">Mis cuentas <button data-act="new-acc">+ Cuenta</button></div><div class="accs">${D.accounts.map(a=>`<button class="acc" data-act="edit-acc" data-id="${a.id}" style="text-align:left"><span>${esc(a.name)}</span><b>${fmt(accBalance(a))}</b></button>`).join("")}</div>`:`<div class="card"><p class="note" style="margin:0 0 12px">Primero añade tu cuenta (banco, efectivo…) con el dinero que tienes hoy.</p><button class="btn" data-act="new-acc">Añadir cuenta</button></div>`)+
+  (multi?`<div class="card hero"><div class="lbl">Saldo total</div>${usedCurs().map((c,i)=>{const a=available(c),v=savingsBal(c);return `<div class="hcur ${i?"":"first"}"><div class="hc-top"><span style="white-space:nowrap">${CUR[c].flag} ${c}</span><b>${fmt(a+v,c)}</b></div><div class="hc-sub">En cuentas ${fmt(a,c)} · En ahorros ${fmt(v,c)}</div></div>`}).join("")}</div>`
+  :`<div class="card hero"><div class="lbl">Saldo total</div><div class="big">${fmt(av+sv)}</div><div class="row"><div class="mini"><span>En cuentas</span><b>${fmt(av)}</b></div><div class="mini"><span>En ahorros</span><b>${fmt(sv)}</b></div></div></div>`)+
+  (D.accounts.length?`<div class="sect">Mis cuentas <button data-act="new-acc">+ Cuenta</button></div><div class="accs">${D.accounts.map(a=>`<button class="acc" data-act="edit-acc" data-id="${a.id}" style="text-align:left"><span>${multi?CUR[accCur(a)].flag+" ":""}${esc(a.name)}</span><b>${fmt(accBalance(a),accCur(a))}</b></button>`).join("")}</div>`:`<div class="card"><p class="note" style="margin:0 0 12px">Primero añade tu cuenta (banco, efectivo…) con el dinero que tienes hoy.</p><button class="btn" data-act="new-acc">Añadir cuenta</button></div>`)+
   `<div class="sect">Resumen del mes</div>`+monthNav()+
+  (multi?`<div class="chips">${usedCurs().map(c=>`<button class="chip ${SC===c?"on":""}" data-act="sumcur" data-c="${c}">${CUR[c].flag} ${CUR[c].sym}</button>`).join("")}</div>`:"")+
   `<div class="grid">
-    ${["ingreso","fijo","boludo","sub"].map(k=>`<div class="stat" style="--c:${TYPES[k].c}"><span>${TYPES[k].plural}</span><b>${fmt(m[k])}</b></div>`).join("")}
-    <div class="stat" style="--c:${TYPES.ahorro.c}"><span>Ahorrado</span><b>${fmt(netAh)}</b></div>
-    <div class="stat" style="--c:${libre>=0?"var(--green)":"var(--red)"}"><span>${libre>=0?"Te sobra":"Te pasaste"}</span><b>${fmt(Math.abs(libre))}</b></div>
+    ${["ingreso","fijo","boludo","sub"].map(k=>`<div class="stat" style="--c:${TYPES[k].c}"><span>${TYPES[k].plural}</span><b>${fmt(m[k],SC)}</b></div>`).join("")}
+    <div class="stat" style="--c:${TYPES.ahorro.c}"><span>Ahorrado</span><b>${fmt(netAh,SC)}</b></div>
+    <div class="stat" style="--c:${libre>=0?"var(--green)":"var(--red)"}"><span>${libre>=0?"Te sobra":"Te pasaste"}</span><b>${fmt(Math.abs(libre),SC)}</b></div>
   </div>
   <div class="card" style="margin-top:10px"><div style="display:flex;justify-content:space-between;font-size:14px"><span class="note">Gastado de lo que entró</span><b>${m.ingreso>0?Math.round((gastos+Math.max(netAh,0))/m.ingreso*100)+"%":"—"}</b></div><div class="bar">${seg}</div>
   <div class="legend">${["fijo","boludo","sub"].map(k=>`<em style="--c:${TYPES[k].c}">${TYPES[k].plural}</em>`).join("")}<em style="--c:${TYPES.ahorro.c}">Ahorros</em></div></div>`+
@@ -293,19 +306,19 @@ function vMovs(){
   const chips=[["todos","Todos",""]].concat(["ingreso","fijo","boludo","sub","ahorro"].map(k=>[k,TYPES[k].plural,TYPES[k].c]));
   let groups="",lastD=null;
   for(const t of f){if(t.date!==lastD){groups+=`<div class="dayhead">${esc(dayLabel(t.date))}</div>`;lastD=t.date}groups+=txItem(t)}
-  const tot=f.reduce((s,t)=>s+TYPES[t.type].sign*t.amount,0);
+  const totTxt=fmtMix(f.map(t=>[TYPES[t.type].sign*t.amount,txCur(t)]),true);
   return topBar("Movimientos",`${f.length} en ${esc(monthName(S.month))}`)+monthNav()+
   `<div class="chips">${chips.map(c=>`<button class="chip ${S.filter===c[0]?"on":""}" style="${c[2]?"--c:"+c[2]:""}" data-act="filter" data-f="${c[0]}">${c[1]}</button>`).join("")}</div>`+
-  (f.length?`<div class="card" style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px"><span class="note">Total</span><b class="${tot>=0?"pos":""}">${tot>=0?"+":"−"}${fmt(Math.abs(tot))}</b></div><div class="list">${groups}</div>`:`<div class="list"><div class="empty">No hay movimientos aquí.</div></div>`);
+  (f.length?`<div class="card" style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px"><span class="note">Total</span><b style="text-align:right">${totTxt}</b></div><div class="list">${groups}</div>`:`<div class="list"><div class="empty">No hay movimientos aquí.</div></div>`);
 }
 
 function recItem(r){
   const T=TYPES[r.kind];const isCur=S.month===curMonth();const paid=paidIn(r,S.month);
-  return `<div class="item" style="--c:${T.c}"><button data-act="edit-rec" data-id="${r.id}" style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;text-align:left"><span class="ic">${T.e}</span><span class="mid"><b>${esc(r.name)}</b><span>${fmt(r.amount)}${r.day?` · día ${r.day}`:""} · ${esc(accName(r.accountId))}</span></span></button>${paid?`<span class="pill ok">Pagado ✓</span>`:`<button class="pill go" data-act="pay" data-id="${r.id}">Pagar</button>`}</div>`;
+  return `<div class="item" style="--c:${T.c}"><button data-act="edit-rec" data-id="${r.id}" style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;text-align:left"><span class="ic">${T.e}</span><span class="mid"><b>${esc(r.name)}</b><span>${fmt(r.amount,accCur(accById(r.accountId)))}${r.day?` · día ${r.day}`:""} · ${esc(accName(r.accountId))}</span></span></button>${paid?`<span class="pill ok">Pagado ✓</span>`:`<button class="pill go" data-act="pay" data-id="${r.id}">Pagar</button>`}</div>`;
 }
 function vFijos(){
-  const sec=k=>{const list=D.recurring.filter(r=>r.kind===k).sort((a,b)=>(a.day||99)-(b.day||99));const tot=list.reduce((s,r)=>s+r.amount,0);
-    return `<div class="sect">${TYPES[k].plural} · ${fmt(tot)}/mes <button data-act="new-rec" data-k="${k}">+ Añadir</button></div>`+
+  const sec=k=>{const list=D.recurring.filter(r=>r.kind===k).sort((a,b)=>(a.day||99)-(b.day||99));const totTxt=fmtMix(list.map(r=>[r.amount,accCur(accById(r.accountId))]));
+    return `<div class="sect">${TYPES[k].plural} · ${totTxt}/mes <button data-act="new-rec" data-k="${k}">+ Añadir</button></div>`+
     (list.length?`<div class="list">${list.map(recItem).join("")}</div>`:`<div class="list"><div class="empty">${k==="fijo"?"Alquiler, luz, gimnasio, móvil…":"Netflix, Spotify, iCloud…"}</div></div>`)};
   return topBar("Fijos y suscripciones","Lo que pagas todos los meses")+monthNav()+
   `<p class="note" style="margin:0 4px 4px">Toca <b>Pagar</b> cuando te lo cobren y se descuenta de la cuenta. Cada mes vuelve a salir pendiente.</p>`+sec("fijo")+sec("sub");
@@ -316,7 +329,7 @@ function vAhorros(){
   const hist=sortTx(D.tx.filter(t=>t.type==="ahorro"||t.type==="retiro")).slice(0,30);
   const pct=g&&g.amount>0?Math.min(100,Math.max(0,sv/g.amount*100)):0;
   return topBar("Ahorros","Tu hucha")+
-  `<div class="card" style="text-align:center"><div class="note">Tienes ahorrado</div><div style="font-size:38px;font-weight:800;color:#ffd166;margin:4px 0">${fmt(sv)}</div>
+  `<div class="card" style="text-align:center"><div class="note">Tienes ahorrado</div><div style="font-size:38px;font-weight:800;color:#ffd166;margin:4px 0">${fmt(sv)}</div>${isMulti()?usedCurs().slice(1).map(c=>`<div style="font-size:20px;font-weight:700;color:#ffd166">${CUR[c].flag} ${fmt(savingsBal(c),c)}</div>`).join(""):""}
   ${g?`<div class="goal"><i style="width:${pct}%"></i></div><div class="note">${Math.round(pct)}% de <b>${esc(g.name||"tu meta")}</b> (${fmt(g.amount)})${sv<g.amount?` · te faltan ${fmt(g.amount-sv)}`:" · ¡Conseguido! 🎉"}</div>`:""}
   <div class="row2" style="margin-top:14px"><button class="btn" data-act="sv-add" style="background:#ffd166;color:#1a2247">+ Guardar</button><button class="btn sec" data-act="sv-out" style="margin-top:0">Sacar</button></div>
   <button class="link" data-act="goal" style="margin-top:14px">${g?"Editar meta":"Ponerte una meta de ahorro"}</button></div>
@@ -327,9 +340,9 @@ function vAhorros(){
 function vAjustes(){
   return topBar("Ajustes",esc(P.name))+
   `<div class="sect">Cuentas <button data-act="new-acc">+ Añadir</button></div>`+
-  (D.accounts.length?`<div class="list">${D.accounts.map(a=>`<button class="item" data-act="edit-acc" data-id="${a.id}" style="--c:var(--or)"><span class="ic">🏦</span><span class="mid"><b>${esc(a.name)}</b><span>Saldo inicial ${fmt(a.initial)}</span></span><span class="amt">${fmt(accBalance(a))}</span></button>`).join("")}</div>`:`<div class="list"><div class="empty">Sin cuentas todavía.</div></div>`)+
+  (D.accounts.length?`<div class="list">${D.accounts.map(a=>`<button class="item" data-act="edit-acc" data-id="${a.id}" style="--c:var(--or)"><span class="ic">${CUR[accCur(a)].flag}</span><span class="mid"><b>${esc(a.name)}</b><span>${esc(CUR[accCur(a)].name)} · inicial ${fmt(a.initial,accCur(a))}</span></span><span class="amt">${fmt(accBalance(a),accCur(a))}</span></button>`).join("")}</div>`:`<div class="list"><div class="empty">Sin cuentas todavía.</div></div>`)+
   `<div class="sect">Ahorros</div><div class="list"><button class="item" data-act="sv-init" style="--c:#ffd166"><span class="ic">🐷</span><span class="mid"><b>Ahorros que ya tenías</b><span>Lo que tenías apartado antes de usar la app</span></span><span class="amt">${fmt(D.savingsInitial)}</span></button></div>
-  <div class="sect">Moneda</div>${curPicker(curCode(),"setcur")}<p class="note" style="margin:6px 4px 0">Cambiar la moneda solo cambia el símbolo: no convierte los importes que ya tienes apuntados.</p>
+  <div class="sect">Moneda principal</div>${curPicker(curCode(),"setcur")}<p class="note" style="margin:6px 4px 0">Es la moneda por defecto de tus cuentas nuevas y de tus ahorros iniciales. Cada cuenta puede tener su propia moneda (tócala arriba para cambiarla). Cambiar la moneda solo cambia el símbolo: no convierte importes.</p>
   <div class="sect">Copia de seguridad</div><div class="card"><p class="note" style="margin:0 0 12px">Tus datos viven solo en este móvil. Haz una copia de vez en cuando (por si cambias de móvil o borras el navegador).</p><div class="row2"><button class="btn sec" data-act="export">Exportar</button><button class="btn sec" data-act="import" style="margin-top:0">Importar</button></div></div>
   <div class="sect">Perfil</div>
   <button class="btn sec" data-act="chpin">Cambiar PIN</button>
@@ -338,7 +351,7 @@ function vAjustes(){
 }
 
 /* ================= SHEETS ================= */
-const accOptions=sel=>D.accounts.map(a=>`<option value="${a.id}" ${a.id===sel?"selected":""}>${esc(a.name)} · ${fmt(accBalance(a))}</option>`).join("");
+const accOptions=sel=>D.accounts.map(a=>`<option value="${a.id}" ${a.id===sel?"selected":""}>${esc(a.name)} · ${fmt(accBalance(a),accCur(a))}</option>`).join("");
 let ed=null; // editing context
 
 function txSheet(tx,preType){
@@ -347,12 +360,13 @@ function txSheet(tx,preType){
   const types=ed.type==="retiro"?["retiro"]:ADD_TYPES;
   openSheet(`<h2>${tx?"Editar movimiento":"Nuevo movimiento"}</h2>
   <div class="chips" id="tchips">${types.map(k=>`<button class="chip ${ed.type===k?"on":""}" style="--c:${TYPES[k].c}" data-act="tchip" data-t="${k}">${TYPES[k].e} ${TYPES[k].label}</button>`).join("")}</div>
-  <div class="field"><input id="f-amt" class="amtin" inputmode="decimal" placeholder="${ph()}" value="${tx?amtStr(tx.amount):""}"></div>
+  <div class="field"><input id="f-amt" class="amtin" inputmode="decimal" placeholder="${ph(accCur(accById(tx?tx.accountId:(D.lastAcc||D.accounts[0].id))))}" value="${tx?amtStr(tx.amount):""}"></div>
   <div class="field"><label>Concepto</label><input id="f-con" placeholder="${ed.type==="ingreso"?"Ej: Asesoría Juan, nómina…":"Ej: Burger, Uber, ropa…"}" maxlength="40" value="${esc(tx?tx.concept:"")}"></div>
   <div class="row2"><div class="field"><label>${ed.type==="ingreso"||ed.type==="retiro"?"Entra en":"Sale de"}</label><select id="f-acc">${accOptions(tx?tx.accountId:(D.lastAcc||D.accounts[0].id))}</select></div>
   <div class="field"><label>Fecha</label><input id="f-date" type="date" value="${tx?tx.date:(S.month===curMonth()?todayStr():S.month+"-01")}"></div></div>
   <button class="btn" data-act="tx-save">Guardar</button>
   ${tx?`<button class="btn danger" data-act="tx-del">Eliminar</button>`:`<button class="btn sec" data-act="close">Cancelar</button>`}`);
+  $("#f-acc").addEventListener("change",e=>{$("#f-amt").placeholder=ph(accCur(accById(e.target.value)))});
   if(!tx)setTimeout(()=>{const i=$("#f-amt");i&&i.focus()},250);
 }
 function txSave(){
@@ -369,15 +383,18 @@ function accountSheet(a,first){
   openSheet(`<h2>${a?"Editar cuenta":first?"Tu primera cuenta":"Nueva cuenta"}</h2>
   ${first?`<p class="note" style="margin-top:-6px">Puede ser tu banco, la tarjeta, efectivo… Luego puedes añadir más.</p>`:""}
   <div class="field"><label>Nombre</label><input id="a-name" placeholder="Ej: BBVA, Revolut, Efectivo" maxlength="24" value="${esc(a?a.name:"")}"></div>
-  <div class="field"><label>${a?"Saldo inicial (cuando empezaste a usar la app)":"¿Cuánto tienes hoy en esta cuenta?"}</label><input id="a-init" inputmode="decimal" placeholder="${ph()}" value="${a?amtStr(a.initial):""}"></div>
-  ${a?`<p class="note">Saldo actual: <b>${fmt(accBalance(a))}</b></p>`:""}
+  <div class="field"><label>Moneda de la cuenta</label><select id="a-cur">${Object.keys(CUR).map(c=>`<option value="${c}" ${(a?accCur(a):curCode())===c?"selected":""}>${CUR[c].flag} ${esc(CUR[c].name)}</option>`).join("")}</select></div>
+  <div class="field"><label>${a?"Saldo inicial (cuando empezaste a usar la app)":"¿Cuánto tienes hoy en esta cuenta?"}</label><input id="a-init" inputmode="decimal" placeholder="${ph(a?accCur(a):null)}" value="${a?amtStr(a.initial):""}"></div>
+  ${a?`<p class="note">Saldo actual: <b>${fmt(accBalance(a),accCur(a))}</b></p>`:""}
   <button class="btn" data-act="acc-save">Guardar</button>
   ${a?(used?`<p class="note" style="text-align:center;margin-top:12px">No se puede eliminar: tiene movimientos.</p>`:`<button class="btn danger" data-act="acc-del">Eliminar cuenta</button>`):`<button class="btn sec" data-act="close">${first?"Más tarde":"Cancelar"}</button>`}`);
+  $("#a-cur").addEventListener("change",e=>{$("#a-init").placeholder=ph(e.target.value)});
 }
 function accSave(){
   const name=$("#a-name").value.trim();if(!name)return toast("Ponle un nombre");
   let init=parseAmt($("#a-init").value);if(isNaN(init))init=0;
-  if(ed.id){Object.assign(D.accounts.find(a=>a.id===ed.id),{name,initial:init})}else D.accounts.push({id:uid(),name,initial:init});
+  const currency=CUR[$("#a-cur").value]?$("#a-cur").value:curCode();
+  if(ed.id){Object.assign(D.accounts.find(a=>a.id===ed.id),{name,initial:init,currency})}else D.accounts.push({id:uid(),name,initial:init,currency});
   save();closeSheet();render();toast("Cuenta guardada ✓");
 }
 
@@ -386,7 +403,7 @@ function recSheet(r,kind){
   ed={kind:"rec",id:r?r.id:null,rk:r?r.kind:kind};
   openSheet(`<h2>${r?"Editar":"Nuevo"} ${ed.rk==="sub"?"suscripción":"gasto fijo"}</h2>
   <div class="field"><label>Nombre</label><input id="r-name" placeholder="${ed.rk==="sub"?"Ej: Netflix":"Ej: Alquiler"}" maxlength="30" value="${esc(r?r.name:"")}"></div>
-  <div class="row2"><div class="field"><label>Importe al mes</label><input id="r-amt" inputmode="decimal" placeholder="${ph()}" value="${r?amtStr(r.amount):""}"></div>
+  <div class="row2"><div class="field"><label>Importe al mes</label><input id="r-amt" inputmode="decimal" placeholder="${ph(accCur(accById(r?r.accountId:(D.lastAcc||D.accounts[0].id))))}" value="${r?amtStr(r.amount):""}"></div>
   <div class="field"><label>Día de cobro</label><input id="r-day" inputmode="numeric" placeholder="1–31" value="${r&&r.day?r.day:""}"></div></div>
   <div class="field"><label>Se cobra de</label><select id="r-acc">${accOptions(r?r.accountId:(D.lastAcc||D.accounts[0].id))}</select></div>
   <button class="btn" data-act="rec-save">Guardar</button>
@@ -404,7 +421,7 @@ function pay(id){
   const r=D.recurring.find(r=>r.id===id);if(!r||paidIn(r,S.month))return;
   let date;if(S.month===curMonth())date=todayStr();else{const d=Math.min(r.day||1,daysInMonth(S.month));date=S.month+"-"+pad2(d)}
   D.tx.push({id:uid(),ts:Date.now(),type:r.kind,amount:r.amount,date,accountId:r.accountId,concept:r.name,recurringId:r.id});
-  save();render();toast(`${r.name}: −${fmt(r.amount)} ✓`);
+  save();render();toast(`${r.name}: −${fmt(r.amount,accCur(accById(r.accountId)))} ✓`);
 }
 
 function moneySheet(title,label,val,onOk){
@@ -439,7 +456,8 @@ function act(a,el){
     case "pick":P=profiles.find(p=>p.id===id);S.lockStep="enter";S.pin="";renderLock();break;
     case "newprof":S.lockStep="name";S.newName="";S.newCur="EUR";renderLock();break;
     case "newcur":{const pn=$("#pname");if(pn)S.newName=pn.value;S.newCur=el.dataset.c;renderLock();break}
-    case "setcur":if(D.currency!==el.dataset.c){D.currency=el.dataset.c;save();render();toast("Moneda: "+CUR[D.currency].name)}break;
+    case "setcur":if(D.currency!==el.dataset.c){const old=D.currency,single=!isMulti();D.currency=el.dataset.c;if(single)D.accounts.forEach(a=>{if(a.currency===old)a.currency=D.currency});save();render();toast("Moneda principal: "+CUR[D.currency].name)}break;
+    case "sumcur":S.sumCur=el.dataset.c;render();break;
     case "back-pick":P=null;S.pin="";S.lockStep=profiles.length?"pick":"name";renderLock();break;
     case "name-ok":{const n=$("#pname").value.trim();if(!n)return toast("Escribe tu nombre");if(profiles.some(p=>p.name.toLowerCase()===n.toLowerCase()))return toast("Ese nombre ya existe en este móvil");S.newName=n;P=null;S.lockStep="new1";S.pin="";renderLock();break}
     case "key":onKey(el.dataset.k);break;
@@ -484,7 +502,7 @@ function act(a,el){
     case "dl":try{const b=new Blob([$("#exp").value],{type:"application/json"});const u=URL.createObjectURL(b);const l=document.createElement("a");l.href=u;l.download="cuentas-claras-"+P.name.toLowerCase().replace(/\W+/g,"-")+"-"+todayStr()+".json";document.body.appendChild(l);l.click();l.remove();setTimeout(()=>URL.revokeObjectURL(u),2000)}catch(e){toast("Usa Copiar")}break;
     case "import":importSheet();break;
     case "imp-ok":{try{const o=JSON.parse($("#imp").value);const d=o&&o.data?o.data:o;if(!d||!Array.isArray(d.tx)||!Array.isArray(d.accounts))throw 0;
-      confirmBox("¿Reemplazar tus datos por esta copia?","Reemplazar",()=>{D=Object.assign(blank(),d);save();render();toast("Copia importada ✓")})}catch(e){toast("Ese texto no es una copia válida")}break}
+      confirmBox("¿Reemplazar tus datos por esta copia?","Reemplazar",()=>{store.set("cc_data_"+P.id,JSON.stringify(d));D=loadData(P.id);save();render();toast("Copia importada ✓")})}catch(e){toast("Ese texto no es una copia válida")}break}
     /* profile */
     case "chpin":S.lockStep="new1";S.pin="";S.newName=P.name;renderLock();break;
     case "delprof":confirmBox(`¿Eliminar el perfil de ${P.name} y todos sus datos de este móvil?`,"Eliminar todo",()=>{store.del("cc_data_"+P.id);profiles=profiles.filter(p=>p.id!==P.id);saveProfiles();lock();toast("Perfil eliminado")});break;
