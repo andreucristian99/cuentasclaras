@@ -189,13 +189,14 @@ function save(){if(P)store.set("cc_data_"+P.id,JSON.stringify(D))}
 
 /* ---------- calculations ---------- */
 const accName=id=>{const a=D.accounts.find(a=>a.id===id);return a?a.name:"—"};
-function accBalance(a){let b=+a.initial||0;for(const t of D.tx){if(t.accountId!==a.id)continue;b+=TYPES[t.type].sign*t.amount}return b}
+const isFut=t=>t.date>todayStr();
+function accBalance(a){let b=+a.initial||0;for(const t of D.tx){if(t.accountId!==a.id||isFut(t))continue;b+=TYPES[t.type].sign*t.amount}return b}
 const accById=id=>D.accounts.find(a=>a.id===id);
 const accCur=a=>(a&&CUR[a.currency])?a.currency:curCode();
 const txCur=t=>accCur(accById(t.accountId));
 function usedCurs(){const l=[curCode()];for(const a of D.accounts){const c=accCur(a);if(!l.includes(c))l.push(c)}return l}
 const isMulti=()=>usedCurs().length>1;
-function savingsBal(c){c=c||curCode();let s=c===curCode()?(+D.savingsInitial||0):0;for(const t of D.tx){if(txCur(t)!==c)continue;if(t.type==="ahorro")s+=t.amount;else if(t.type==="retiro")s-=t.amount}return s}
+function savingsBal(c){c=c||curCode();let s=c===curCode()?(+D.savingsInitial||0):0;for(const t of D.tx){if(txCur(t)!==c||isFut(t))continue;if(t.type==="ahorro")s+=t.amount;else if(t.type==="retiro")s-=t.amount}return s}
 const available=c=>{c=c||curCode();return D.accounts.filter(a=>accCur(a)===c).reduce((s,a)=>s+accBalance(a),0)};
 function monthSum(m,c){c=c||curCode();const r={ingreso:0,fijo:0,boludo:0,sub:0,ahorro:0,retiro:0};for(const t of D.tx)if(t.date.slice(0,7)===m&&txCur(t)===c)r[t.type]+=t.amount;return r}
 /* sum a list of [amount,currency] into "1.000 € + 20 US$" */
@@ -271,7 +272,7 @@ const topBar=(t,sub)=>`<div class="top"><div><h1>${t}</h1>${sub?`<div class="sub
 const monthNav=()=>`<div class="monthnav"><button data-act="mprev">‹</button><b>${esc(monthName(S.month))}</b><button data-act="mnext">›</button></div>`;
 function txItem(t){
   const T=TYPES[t.type];const plus=T.sign>0;
-  return `<button class="item" data-act="edit-tx" data-id="${t.id}" style="--c:${T.c}"><span class="ic">${T.e}</span><span class="mid"><b>${esc(t.concept||T.label)}</b><span>${T.label} · ${esc(accName(t.accountId))}</span></span><span class="amt ${plus?"pos":"neg"}">${plus?"+":"−"}${fmt(t.amount,txCur(t))}</span></button>`;
+  return `<button class="item" data-act="edit-tx" data-id="${t.id}" style="--c:${T.c}"><span class="ic">${T.e}</span><span class="mid"><b>${esc(t.concept||T.label)}</b><span>${isFut(t)?'<b style="display:inline;color:var(--or)">Previsto</b> · ':''}${T.label} · ${esc(accName(t.accountId))}</span></span><span class="amt ${plus?"pos":"neg"}">${plus?"+":"−"}${fmt(t.amount,txCur(t))}</span></button>`;
 }
 
 function vInicio(){
@@ -280,13 +281,14 @@ function vInicio(){
   const base=Math.max(m.ingreso,gastos+Math.max(netAh,0),1);
   const seg=["fijo","boludo","sub"].map(k=>`<i style="width:${m[k]/base*100}%;background:${TYPES[k].c}"></i>`).join("")+(netAh>0?`<i style="width:${netAh/base*100}%;background:${TYPES.ahorro.c}"></i>`:"");
   const isCur=S.month===curMonth();
+  const fut=S.month>curMonth();
   const pend=isCur?D.recurring.filter(r=>!paidIn(r,S.month)).sort((a,b)=>(a.day||0)-(b.day||0)):[];
   const last=sortTx(D.tx.filter(t=>t.date.slice(0,7)===S.month)).slice(0,6);
   return topBar(`Hola, ${esc(P.name)}`,"Tus cuentas, claras")+
-  (multi?`<div class="card hero"><div class="lbl">Saldo total</div>${usedCurs().map((c,i)=>{const a=available(c),v=savingsBal(c);return `<div class="hcur ${i?"":"first"}"><div class="hc-top"><span style="white-space:nowrap">${CUR[c].flag} ${c}</span><b>${fmt(a+v,c)}</b></div><div class="hc-sub">En cuentas ${fmt(a,c)} · En ahorros ${fmt(v,c)}</div></div>`}).join("")}</div>`
-  :`<div class="card hero"><div class="lbl">Saldo total</div><div class="big">${fmt(av+sv)}</div><div class="row"><div class="mini"><span>En cuentas</span><b>${fmt(av)}</b></div><div class="mini"><span>En ahorros</span><b>${fmt(sv)}</b></div></div></div>`)+
+  (multi?`<div class="card hero"><div class="lbl">Saldo total</div>${usedCurs().map((c,i)=>{const a=available(c),v=savingsBal(c);return `<div class="hcur ${i?"":"first"}"><div class="hc-top"><span style="white-space:nowrap">${CUR[c].flag} ${c}</span><b>${fmt(a+v,c)}</b></div><div class="hc-sub">Disponible ${fmt(a,c)} · Ahorros ${fmt(v,c)}</div></div>`}).join("")}</div>`
+  :`<div class="card hero"><div class="lbl">Saldo total</div><div class="big">${fmt(av+sv)}</div><div class="row"><div class="mini"><span>Disponible</span><b>${fmt(av)}</b></div><div class="mini"><span>${D.goal&&D.goal.name?"🐷 "+esc(D.goal.name):"Ahorros"}</span><b>${fmt(sv)}</b></div></div>${D.goal&&D.goal.amount>0?`<div class="goal" style="background:rgba(255,255,255,.25);margin-top:12px"><i style="width:${Math.min(100,Math.max(0,sv/D.goal.amount*100))}%;background:#fff"></i></div><div style="font-size:12px;opacity:.9">${Math.round(Math.max(0,sv/D.goal.amount*100))}% de ${fmt(D.goal.amount)}</div>`:""}</div>`)+`<button class="btn sec" data-act="restart" style="margin-bottom:4px">🔄 Registrar mi dinero actual</button>`+
   (D.accounts.length?`<div class="sect">Mis cuentas <button data-act="new-acc">+ Cuenta</button></div><div class="accs">${D.accounts.map(a=>`<button class="acc" data-act="edit-acc" data-id="${a.id}" style="text-align:left"><span>${multi?CUR[accCur(a)].flag+" ":""}${esc(a.name)}</span><b>${fmt(accBalance(a),accCur(a))}</b></button>`).join("")}</div>`:`<div class="card"><p class="note" style="margin:0 0 12px">Primero añade tu cuenta (banco, efectivo…) con el dinero que tienes hoy.</p><button class="btn" data-act="new-acc">Añadir cuenta</button></div>`)+
-  `<div class="sect">Resumen del mes</div>`+monthNav()+
+  `<div class="sect">Resumen del mes</div>`+monthNav()+(fut?`<p class="note" style="margin:-4px 4px 10px">Mes futuro: lo que apuntes aquí queda como <b>previsto</b> y no toca tu saldo hasta que llegue la fecha.</p>`:"")+
   (multi?`<div class="chips">${usedCurs().map(c=>`<button class="chip ${SC===c?"on":""}" data-act="sumcur" data-c="${c}">${CUR[c].flag} ${CUR[c].sym}</button>`).join("")}</div>`:"")+
   `<div class="grid">
     ${["ingreso","fijo","boludo","sub"].map(k=>`<div class="stat" style="--c:${TYPES[k].c}"><span>${TYPES[k].plural}</span><b>${fmt(m[k],SC)}</b></div>`).join("")}
@@ -339,6 +341,7 @@ function vAhorros(){
 
 function vAjustes(){
   return topBar("Ajustes",esc(P.name))+
+  `<div class="sect">Dinero actual</div><button class="btn" data-act="restart">🔄 Registrar mi dinero actual</button>${store.get("cc_bak_"+P.id)?`<button class="btn sec" data-act="undo-restart">↩️ Deshacer último registro</button>`:""}`+
   `<div class="sect">Cuentas <button data-act="new-acc">+ Añadir</button></div>`+
   (D.accounts.length?`<div class="list">${D.accounts.map(a=>`<button class="item" data-act="edit-acc" data-id="${a.id}" style="--c:var(--or)"><span class="ic">${CUR[accCur(a)].flag}</span><span class="mid"><b>${esc(a.name)}</b><span>${esc(CUR[accCur(a)].name)} · inicial ${fmt(a.initial,accCur(a))}</span></span><span class="amt">${fmt(accBalance(a),accCur(a))}</span></button>`).join("")}</div>`:`<div class="list"><div class="empty">Sin cuentas todavía.</div></div>`)+
   `<div class="sect">Ahorros</div><div class="list"><button class="item" data-act="sv-init" style="--c:#ffd166"><span class="ic">🐷</span><span class="mid"><b>Ahorros que ya tenías</b><span>Lo que tenías apartado antes de usar la app</span></span><span class="amt">${fmt(D.savingsInitial)}</span></button></div>
@@ -428,6 +431,32 @@ function moneySheet(title,label,val,onOk){
   ed={kind:"money",cb:onOk};
   openSheet(`<h2>${esc(title)}</h2><div class="field"><label>${esc(label)}</label><input id="m-amt" class="amtin" inputmode="decimal" placeholder="${ph()}" value="${val!=null?amtStr(val):""}"></div><button class="btn" data-act="money-ok">Guardar</button><button class="btn sec" data-act="close">Cancelar</button>`);
 }
+function restartSheet(){
+  const g=D.goal;
+  openSheet(`<h2>Registrar mi dinero actual</h2><p class="note" style="margin-top:-6px">Pon lo que tienes <b>hoy</b>. La app arranca desde aquí.</p>
+  <div class="field"><label>💳 Disponible hoy (lo que puedes usar)</label><input id="rs-av" class="amtin" inputmode="decimal" placeholder="${ph()}" value="${amtStr(available())}"></div>
+  <div class="field"><label>🐷 Ahorrado hoy</label><input id="rs-sv" class="amtin" inputmode="decimal" placeholder="${ph()}" value="${amtStr(savingsBal())}"></div>
+  <div class="row2"><div class="field"><label>Meta: ¿para qué?</label><input id="rs-gn" maxlength="30" value="${esc(g&&g.name?g.name:"Para casa")}"></div><div class="field"><label>Cantidad</label><input id="rs-ga" inputmode="decimal" value="${g?amtStr(g.amount):"4000"}"></div></div>
+  <label style="display:flex;gap:10px;align-items:flex-start;margin:4px 0 14px;font-size:14px"><input type="checkbox" id="rs-clean" checked style="width:auto;margin-top:3px"><span>Borrar el historial anterior y empezar limpio<br><span class="note">Se mantienen tus fijos, suscripciones y lo ya pagado este mes. Los movimientos previstos (fechas futuras) también se quedan.</span></span></label>
+  <button class="btn" data-act="restart-ok">Guardar</button><button class="btn sec" data-act="close">Cancelar</button>`);
+}
+function doRestart(){
+  const av=parseAmt($("#rs-av").value),sv=parseAmt($("#rs-sv").value),ga=parseAmt($("#rs-ga").value),gn=$("#rs-gn").value.trim(),clean=$("#rs-clean").checked;
+  if(isNaN(av)||isNaN(sv))return toast("Revisa los importes");
+  store.set("cc_bak_"+P.id,JSON.stringify(D));
+  const main=curCode(),cm=curMonth();
+  if(clean){
+    const old={};D.accounts.forEach(a=>old[a.id]=accBalance(a));
+    D.tx=D.tx.filter(t=>txCur(t)!==main||isFut(t)||(t.recurringId&&t.date.slice(0,7)===cm));
+    D.accounts.forEach(a=>{a.initial=(+a.initial||0)+old[a.id]-accBalance(a)});
+  }
+  let acc=D.accounts.find(a=>accCur(a)===main);
+  if(!acc){acc={id:uid(),name:"Disponible",initial:0,currency:main};D.accounts.push(acc)}
+  acc.initial=(+acc.initial||0)+av-available(main);
+  D.savingsInitial=(+D.savingsInitial||0)+sv-savingsBal(main);
+  D.goal=ga>0?{name:gn,amount:ga}:D.goal;
+  save();closeSheet();S.view="inicio";S.month=cm;render();toast("Dinero actual registrado ✓");
+}
 function goalSheet(){
   const g=D.goal;
   openSheet(`<h2>Meta de ahorro</h2><div class="field"><label>¿Para qué ahorras?</label><input id="g-name" placeholder="Ej: Viaje, colchón, coche" maxlength="30" value="${esc(g?g.name:"")}"></div>
@@ -492,6 +521,9 @@ function act(a,el){
     case "sv-out":if(!D.accounts.length)return accountSheet(null,true);
       ed={kind:"tx",id:null,type:"retiro"};txSheet(null,"retiro");break;
     case "goal":goalSheet();break;
+    case "restart":restartSheet();break;
+    case "restart-ok":doRestart();break;
+    case "undo-restart":confirmBox("¿Volver a como estaba antes del último registro?","Deshacer",()=>{const b=store.get("cc_bak_"+P.id);if(!b)return;store.set("cc_data_"+P.id,b);store.del("cc_bak_"+P.id);D=loadData(P.id);render();toast("Deshecho ✓")});break;
     case "goal-save":{const n=$("#g-name").value.trim(),v=parseAmt($("#g-amt").value);if(!(v>0))return toast("Pon una cantidad");D.goal={name:n,amount:v};save();closeSheet();render();break}
     case "goal-del":D.goal=null;save();closeSheet();render();break;
     case "sv-init":moneySheet("Ahorros que ya tenías","Cantidad",D.savingsInitial,v=>{D.savingsInitial=v});break;
